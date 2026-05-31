@@ -1,0 +1,16 @@
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+mlruns/
+mlartifacts/
+models/
+*.pkl
+*.joblib
+*.parquet
+*.csv
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+.env
+
