@@ -161,6 +161,24 @@ class CustomerAggregator(BaseEstimator, TransformerMixin):
         return agg.reset_index()
 
 
+class ColumnDropper(BaseEstimator, TransformerMixin):
+    """Drop identifier columns that should not reach the classifier.
+
+    Used at the end of the serving pipeline: the Task 3 feature pipeline keeps
+    ``CustomerId`` (via ``remainder='passthrough'``) for traceability, but the
+    classifier is trained without it, so it must be dropped before ``predict``.
+    """
+
+    def __init__(self, columns: list[str] | None = None) -> None:
+        self.columns = columns or ["CustomerId"]
+
+    def fit(self, X: pd.DataFrame, y=None) -> "ColumnDropper":
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        return X.drop(columns=[c for c in self.columns if c in X.columns])
+
+
 def build_feature_pipeline() -> Pipeline:
     """Build the full raw-transactions -> model-ready-DataFrame pipeline.
 
@@ -356,15 +374,24 @@ def build_processed_dataset(
     snapshot_date: pd.Timestamp | None = None,
     n_clusters: int = 3,
     random_state: int = RANDOM_STATE,
-) -> pd.DataFrame:
+    return_pipeline: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, Pipeline]:
     """End-to-end Task 3 + Task 4 output: model-ready features plus ``is_high_risk``.
 
     This is the "main processed dataset" used for model training in Task 5: one
-    row per customer, engineered/encoded/scaled features from
-    ``engineer_customer_features``, joined to the RFM-derived ``is_high_risk``
-    proxy label from ``calculate_rfm`` + ``assign_high_risk_label``.
+    row per customer, engineered/encoded/scaled features from the Task 3 feature
+    pipeline, joined to the RFM-derived ``is_high_risk`` proxy label from
+    ``calculate_rfm`` + ``assign_high_risk_label``.
+
+    :param return_pipeline: if True, also return the *fitted* feature pipeline.
+        Training code needs this reference so it can be bundled with the trained
+        classifier into one serving pipeline (see ``src/train.py``) - at inference
+        time the API must reapply the exact scaler/encoder learned during training
+        to new raw transactions, not refit on whatever single customer it receives.
     """
-    features = engineer_customer_features(transactions)
+    feature_pipeline = build_feature_pipeline()
+    features = feature_pipeline.fit_transform(transactions)
+
     rfm = calculate_rfm(transactions, snapshot_date=snapshot_date)
     rfm_labeled = assign_high_risk_label(rfm, n_clusters=n_clusters, random_state=random_state)
 
@@ -373,4 +400,6 @@ def build_processed_dataset(
         on="CustomerId",
         how="left",
     )
+    if return_pipeline:
+        return processed, feature_pipeline
     return processed
