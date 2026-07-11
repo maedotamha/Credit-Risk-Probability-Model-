@@ -17,6 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
@@ -261,3 +262,115 @@ def rank_features_by_iv(
             iv = np.nan
         rows.append({"feature": feature, "iv": iv})
     return pd.DataFrame(rows).sort_values("iv", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: RFM-based proxy target ("is_high_risk")
+#
+# The raw dataset has no default label. As a stand-in, customers are segmented by
+# Recency/Frequency/Monetary behavior into 3 K-Means clusters; the least engaged
+# cluster (long time since last transaction, few transactions, low transaction
+# value) is treated as the high-risk proxy. This is an explicit modeling
+# assumption, not a measured default outcome - see the final report for the
+# business risks this introduces.
+# ---------------------------------------------------------------------------
+
+RANDOM_STATE = 42
+
+
+def calculate_rfm(transactions: pd.DataFrame, snapshot_date: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Compute Recency, Frequency, and Monetary value per ``CustomerId``.
+
+    :param snapshot_date: reference date Recency is measured against. Defaults to
+        one day after the latest transaction in the data, so every customer has a
+        strictly positive Recency and the metric is stable if rerun on the same
+        historical extract.
+    """
+    df = transactions.copy()
+    df["TransactionStartTime"] = pd.to_datetime(df["TransactionStartTime"], utc=True)
+
+    if snapshot_date is None:
+        snapshot_date = df["TransactionStartTime"].max() + pd.Timedelta(days=1)
+    else:
+        snapshot_date = pd.Timestamp(snapshot_date)
+        if snapshot_date.tzinfo is None:
+            snapshot_date = snapshot_date.tz_localize("UTC")
+
+    grouped = df.groupby("CustomerId")
+    rfm = pd.DataFrame(
+        {
+            "Recency": (snapshot_date - grouped["TransactionStartTime"].max()).dt.days,
+            "Frequency": grouped.size(),
+            "Monetary": grouped["Value"].sum(),
+        }
+    )
+    rfm.index.name = "CustomerId"
+    return rfm.reset_index()
+
+
+def assign_high_risk_label(
+    rfm: pd.DataFrame, n_clusters: int = 3, random_state: int = RANDOM_STATE
+) -> pd.DataFrame:
+    """Cluster customers on scaled RFM values and label the least-engaged cluster.
+
+    The least-engaged cluster is identified automatically (not by manual
+    inspection) as the cluster with the highest mean Recency and lowest mean
+    Frequency/Monetary, using z-scored cluster-level means so the three RFM
+    dimensions contribute comparably regardless of their raw scale.
+
+    Frequency and Monetary are log1p-transformed before scaling: both are
+    extremely right-skewed (Task 1 EDA: skew ~51 on the underlying transaction
+    values), and clustering on raw values lets a handful of extreme outliers
+    dominate the distance metric, producing a degenerate "cluster" of a few
+    outlier customers instead of 3 meaningful behavioral segments.
+    """
+    features = pd.DataFrame(
+        {
+            "Recency": rfm["Recency"],
+            "Frequency": np.log1p(rfm["Frequency"]),
+            "Monetary": np.log1p(rfm["Monetary"]),
+        }
+    )
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(features)
+
+    kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
+    clusters = kmeans.fit_predict(scaled)
+
+    result = rfm.copy()
+    result["Cluster"] = clusters
+
+    cluster_profile = result.groupby("Cluster")[["Recency", "Frequency", "Monetary"]].mean()
+    z_profile = (cluster_profile - cluster_profile.mean()) / cluster_profile.std()
+    # High recency is bad (long time since last purchase); high frequency/monetary
+    # is good. A larger risk_score means less engaged / higher assumed risk.
+    risk_score = z_profile["Recency"] - z_profile["Frequency"] - z_profile["Monetary"]
+    high_risk_cluster = risk_score.idxmax()
+
+    result["is_high_risk"] = (result["Cluster"] == high_risk_cluster).astype(int)
+    return result
+
+
+def build_processed_dataset(
+    transactions: pd.DataFrame,
+    snapshot_date: pd.Timestamp | None = None,
+    n_clusters: int = 3,
+    random_state: int = RANDOM_STATE,
+) -> pd.DataFrame:
+    """End-to-end Task 3 + Task 4 output: model-ready features plus ``is_high_risk``.
+
+    This is the "main processed dataset" used for model training in Task 5: one
+    row per customer, engineered/encoded/scaled features from
+    ``engineer_customer_features``, joined to the RFM-derived ``is_high_risk``
+    proxy label from ``calculate_rfm`` + ``assign_high_risk_label``.
+    """
+    features = engineer_customer_features(transactions)
+    rfm = calculate_rfm(transactions, snapshot_date=snapshot_date)
+    rfm_labeled = assign_high_risk_label(rfm, n_clusters=n_clusters, random_state=random_state)
+
+    processed = features.merge(
+        rfm_labeled[["CustomerId", "Recency", "Frequency", "Monetary", "is_high_risk"]],
+        on="CustomerId",
+        how="left",
+    )
+    return processed
