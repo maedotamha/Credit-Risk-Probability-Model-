@@ -4,6 +4,9 @@ import pytest
 from src.data_processing import (
     CustomerAggregator,
     DatetimeFeatureExtractor,
+    assign_high_risk_label,
+    build_processed_dataset,
+    calculate_rfm,
     calculate_woe_iv,
     engineer_customer_features,
     missing_required_columns,
@@ -126,3 +129,81 @@ def test_calculate_woe_iv_is_positive_for_a_discriminating_feature():
     assert iv > 0
     assert "woe" in woe_table.columns
     assert not woe_table["woe"].isna().any()
+
+
+@pytest.fixture
+def rfm_transactions() -> pd.DataFrame:
+    """Synthetic transactions with an unambiguous engaged vs. disengaged split.
+
+    engaged_1/engaged_2: many recent, moderate-to-high-value transactions.
+    dormant_1/dormant_2: a single small transaction, long before the snapshot date.
+    """
+    common = {
+        "ProductCategory": "airtime",
+        "ChannelId": "ChannelId_2",
+        "ProviderId": "ProviderId_1",
+        "PricingStrategy": 2,
+        "FraudResult": 0,
+    }
+    rows = []
+    for customer in ["engaged_1", "engaged_2"]:
+        for day in range(1, 21):
+            rows.append(
+                {
+                    "CustomerId": customer,
+                    "Amount": 500.0,
+                    "Value": 500.0,
+                    "TransactionStartTime": f"2019-02-{day:02d}T10:00:00Z",
+                    **common,
+                }
+            )
+    for customer in ["dormant_1", "dormant_2"]:
+        rows.append(
+            {
+                "CustomerId": customer,
+                "Amount": 20.0,
+                "Value": 20.0,
+                "TransactionStartTime": "2018-11-16T10:00:00Z",
+                **common,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def test_calculate_rfm_uses_fixed_snapshot_date_and_expected_values(rfm_transactions):
+    snapshot = pd.Timestamp("2019-03-01", tz="UTC")
+    rfm = calculate_rfm(rfm_transactions, snapshot_date=snapshot).set_index("CustomerId")
+
+    assert rfm.loc["engaged_1", "Frequency"] == 20
+    assert rfm.loc["dormant_1", "Frequency"] == 1
+    assert rfm.loc["engaged_1", "Recency"] < rfm.loc["dormant_1", "Recency"]
+    assert rfm.loc["engaged_1", "Monetary"] == pytest.approx(10_000.0)
+
+
+def test_assign_high_risk_label_flags_the_dormant_customers(rfm_transactions):
+    snapshot = pd.Timestamp("2019-03-01", tz="UTC")
+    rfm = calculate_rfm(rfm_transactions, snapshot_date=snapshot)
+
+    labeled = assign_high_risk_label(rfm, n_clusters=3, random_state=42).set_index("CustomerId")
+
+    assert labeled.loc["dormant_1", "is_high_risk"] == 1
+    assert labeled.loc["dormant_2", "is_high_risk"] == 1
+    assert labeled.loc["engaged_1", "is_high_risk"] == 0
+    assert labeled.loc["engaged_2", "is_high_risk"] == 0
+
+
+def test_assign_high_risk_label_is_reproducible_with_fixed_random_state(rfm_transactions):
+    rfm = calculate_rfm(rfm_transactions, snapshot_date=pd.Timestamp("2019-03-01", tz="UTC"))
+
+    first = assign_high_risk_label(rfm, random_state=42)["is_high_risk"].tolist()
+    second = assign_high_risk_label(rfm, random_state=42)["is_high_risk"].tolist()
+
+    assert first == second
+
+
+def test_build_processed_dataset_merges_is_high_risk_without_dropping_rows(rfm_transactions):
+    processed = build_processed_dataset(rfm_transactions, snapshot_date=pd.Timestamp("2019-03-01", tz="UTC"))
+
+    assert len(processed) == rfm_transactions["CustomerId"].nunique()
+    assert "is_high_risk" in processed.columns
+    assert processed["is_high_risk"].isna().sum() == 0
