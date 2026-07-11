@@ -4,6 +4,7 @@ data/processed/*
 !data/processed/.gitkeep
 mlruns/
 mlartifacts/
+mlflow.db
 models/
 *.pkl
 *.joblib
