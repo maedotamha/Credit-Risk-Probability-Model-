@@ -75,8 +75,26 @@ However, behavioral transaction data can contain nonlinear patterns. A Gradient 
 
 The recommended approach is not to choose interpretability or performance blindly. The project should train both types of models, compare them with metrics such as precision, recall, F1, and ROC-AUC, and then decide whether the performance gain from a complex model is large enough to justify the governance cost.
 
-## Interim Submission
+## Status — complete
 
-The interim report is available at [reports/interim_report.md](reports/interim_report.md).
+- **Task 1** — Business understanding: see above.
+- **Task 2** — EDA: [notebooks/eda.ipynb](notebooks/eda.ipynb), executed against the real 95,662-row Xente dataset.
+- **Task 3** — Feature engineering pipeline: [src/data_processing.py](src/data_processing.py) (`build_feature_pipeline`, a single `sklearn.Pipeline`).
+- **Task 4** — RFM proxy target: `calculate_rfm` / `assign_high_risk_label` / `build_processed_dataset` in the same module.
+- **Task 5** — Model training, tuning, and MLflow tracking: [src/train.py](src/train.py). XGBoost (ROC-AUC 0.851) beats Logistic Regression (ROC-AUC 0.800) and is registered as `credit-risk-is-high-risk` in the MLflow Model Registry.
+- **Task 6** — Deployment: [src/api/main.py](src/api/main.py) (FastAPI `/predict`), `Dockerfile`, `docker-compose.yml`, `.github/workflows/ci.yml`.
+- **Tests**: 16 passing unit tests across `tests/` (`pytest`), zero `flake8` findings.
 
-It summarizes the business understanding, Basel II implications, proxy-target risk, and initial EDA findings for Tasks 1 and 2.
+### Reports
+
+- Interim (Tasks 1-2): [reports/interim_report.md](reports/interim_report.md)
+- Final (Medium-style, all tasks): [reports/final_report.md](reports/final_report.md)
+
+### Running it
+
+```bash
+python -m venv .venv && .venv/Scripts/activate  # or source .venv/bin/activate on macOS/Linux
+pip install -r requirements.txt
+python -m src.train          # trains, tunes, and registers the best model in MLflow
+python -m uvicorn src.api.main:app --reload   # or: docker compose up --build
+```
