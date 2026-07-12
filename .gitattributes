@@ -1,0 +1,5 @@
+*.pdf -text -diff binary
+*.png -text -diff binary
+*.jpg -text -diff binary
+*.jpeg -text -diff binary
+*.ipynb -text
