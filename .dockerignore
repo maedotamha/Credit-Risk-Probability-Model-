@@ -1,0 +1,17 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.git/
+.github/
+data/raw/
+data/processed/
+notebooks/
+reports/
+mlruns/
+mlartifacts/
+mlflow.db
+*.egg-info/
+.env

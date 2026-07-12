@@ -10,6 +10,7 @@ Run with: python -m src.train
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import mlflow
@@ -32,7 +33,7 @@ from src.data_processing import ColumnDropper, build_processed_dataset
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
-MLFLOW_TRACKING_URI = "sqlite:///mlflow.db"
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
 EXPERIMENT_NAME = "credit-risk-model"
 REGISTERED_MODEL_NAME = "credit-risk-is-high-risk"
 

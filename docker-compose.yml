@@ -3,4 +3,14 @@ services:
     build: .
     ports:
       - "8000:8000"
-
+    environment:
+      - MLFLOW_TRACKING_URI=sqlite:///mlflow.db
+    volumes:
+      # The registered model lives in the local MLflow tracking store (run
+      # `python -m src.train` on the host first) so the container serves
+      # whatever was most recently trained/registered without being rebuilt.
+      # mlflow.db is mounted read-write because SQLite needs to create a
+      # journal file even for read-only queries; mlartifacts (the actual
+      # model binaries) are safely read-only.
+      - ./mlflow.db:/app/mlflow.db
+      - ./mlartifacts:/app/mlartifacts:ro
